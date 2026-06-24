@@ -1,0 +1,70 @@
+#
+# Copyright (c) 2022 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+cmake_minimum_required(VERSION 3.20.0)
+
+# Flag which defines whether application is compiled as gateway/dongle or headset
+add_compile_definitions(HEADSET=1)
+add_compile_definitions(GATEWAY=2)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+
+# Test a configuration file option has been given
+if(NOT DEFINED EXTRA_CONF_FILE)
+    message(FATAL_ERROR "No configuration file specified, set -- -DEXTRA_CONF_FILE=<configuration file>")
+endif()
+
+project(PA_DATA_BROADCASTER)
+
+# Zephyr platform: route port_log.h to Zephyr logging backend
+add_compile_definitions(PA_LOG_PLATFORM_HEADER="zephyr_log.h")
+
+string(TIMESTAMP NRF5340_AUDIO_CORE_APP_COMP_DATE "%a %b %d %H:%M:%S %Y")
+
+# Generate fw_info_app.c
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/utils/fw_info_app.c.in"
+               "${CMAKE_BINARY_DIR}/fw_info_app.c"
+               @ONLY)
+
+target_sources(app PRIVATE
+    ${CMAKE_BINARY_DIR}/fw_info_app.c
+    )
+
+if (CONFIG_BT_BAP_BROADCAST_SINK)
+	add_subdirectory(broadcast_sink)
+endif()
+
+if (CONFIG_BT_BAP_BROADCAST_SOURCE)
+	add_subdirectory(broadcast_source)
+endif()
+
+# Include application events and configuration headers
+zephyr_library_include_directories(
+    include
+    src/audio
+    src/bluetooth
+    src/drivers
+    src/modules
+    src/utils
+    src/utils/macros
+    src/core
+    src/ports
+    src/adapters
+    src/app
+)
+
+zephyr_library_include_directories(app PRIVATE
+    ${ZEPHYR_NRF_MODULE_DIR}/boards/arm/nrf5340_audio_dk_nrf5340)
+
+# Application sources
+add_subdirectory(src/audio)
+add_subdirectory(src/bluetooth)
+add_subdirectory(src/drivers)
+add_subdirectory(src/modules)
+add_subdirectory(src/utils)
+add_subdirectory(src/core)
+add_subdirectory(src/adapters)
+add_subdirectory(src/app)
