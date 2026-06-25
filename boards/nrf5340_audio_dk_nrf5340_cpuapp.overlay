@@ -42,7 +42,7 @@
 	};
 };
 
-/* Disable i2c1 and its children (shares instance 1 with uart1) */
+/* Disable i2c1 and its children (power measurement not used) */
 &i2c1 {
 	status = "disabled";
 
@@ -50,9 +50,4 @@
 	/delete-node/ ina231@45;
 	/delete-node/ ina231@41;
 	/delete-node/ ina231@40;
-};
-
-/* Enable UART1 for PC control app communication */
-&uart1 {
-	status = "okay";
 };

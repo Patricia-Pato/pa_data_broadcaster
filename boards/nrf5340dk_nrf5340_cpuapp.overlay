@@ -44,6 +44,7 @@
 		hp-channel-l;
 		hp-channel-r;
 	};
+
 };
 
 &pinctrl {
@@ -81,12 +82,3 @@
 	pinctrl-names = "default", "sleep";
 };
 
-/* Disable i2c1 (shares instance 1 with uart1) */
-&i2c1 {
-	status = "disabled";
-};
-
-/* Enable UART1 for PC control app communication */
-&uart1 {
-	status = "okay";
-};

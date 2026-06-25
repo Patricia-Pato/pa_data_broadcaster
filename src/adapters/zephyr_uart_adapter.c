@@ -72,9 +72,9 @@ static int adapter_init(void *ctx, pa_uart_rx_cb_t rx_cb, void *user_data)
 {
 	struct zephyr_uart_adapter_state *s = ctx;
 
-	s->dev = DEVICE_DT_GET(DT_NODELABEL(uart1));
+	s->dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 	if (!device_is_ready(s->dev)) {
-		LOG_ERR("UART1 device not ready");
+		LOG_ERR("UART0 device not ready");
 		return -ENODEV;
 	}
 
@@ -88,7 +88,7 @@ static int adapter_init(void *ctx, pa_uart_rx_cb_t rx_cb, void *user_data)
 	uart_irq_callback_user_data_set(s->dev, uart_isr_callback, s);
 	uart_irq_rx_enable(s->dev);
 
-	LOG_INF("UART adapter initialized on uart1");
+	LOG_INF("UART adapter initialized on uart0");
 	return 0;
 }
 
