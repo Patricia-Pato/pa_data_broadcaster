@@ -26,7 +26,7 @@ LOG_MODULE_DECLARE(bt_mgmt_scan);
  * an invalid broadcast ID.
  */
 #define INVALID_BROADCAST_ID		  0xFFFFFFFF
-#define PA_SYNC_SKIP			  2
+#define PA_SYNC_SKIP			  0
 /* Similar to retries for connections */
 #define PA_SYNC_INTERVAL_TO_TIMEOUT_RATIO 20
 #define BIS_SYNC_STATE_NOT_SYNCED	  0

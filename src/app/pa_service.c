@@ -84,8 +84,8 @@ static void handle_data_send_req(struct pa_service *svc,
 		goto send_rsp;
 	}
 
-	/* Start oneshot timer to detect when PA interval has elapsed */
-	svc->timer->start_oneshot(svc->timer->ctx, 100,
+	/* Wait longer than one PA interval (150-200ms) to ensure data is broadcast */
+	svc->timer->start_oneshot(svc->timer->ctx, 250,
 				  pa_service_on_pa_interval, svc);
 
 send_rsp:;
