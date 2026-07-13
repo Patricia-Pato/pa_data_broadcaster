@@ -24,6 +24,7 @@
 #include "le_audio_rx.h"
 #include "fw_info_app.h"
 #include "pa_protocol.h"
+#include "pa_data_gatt.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main, CONFIG_MAIN_LOG_LEVEL);
@@ -90,6 +91,11 @@ static bool pa_data_parse_cb(struct bt_data *data, void *user_data)
 		memcpy(prev_pa_data, data->data, data->data_len);
 		prev_pa_data_len = data->data_len;
 		pa_data_received_once = true;
+
+		int err = pa_data_gatt_notify(data->data, data->data_len);
+		if (err && err != -ENOTCONN) {
+			LOG_WRN("GATT notify failed: %d", err);
+		}
 	}
 
 	return false;
