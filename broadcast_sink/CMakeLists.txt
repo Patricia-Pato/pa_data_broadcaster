@@ -6,4 +6,5 @@
 
 target_sources(app PRIVATE
 	       ${CMAKE_CURRENT_SOURCE_DIR}/main.c
-	       ${CMAKE_CURRENT_SOURCE_DIR}/pa_data_gatt.c)
+	       ${CMAKE_CURRENT_SOURCE_DIR}/auracast_gatt.c
+	       ${CMAKE_CURRENT_SOURCE_DIR}/hid_stub.c)
