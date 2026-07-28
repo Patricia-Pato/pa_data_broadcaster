@@ -748,6 +748,16 @@ static void gatt_cmd_handler(struct bt_conn *conn, uint16_t opcode,
 
 /* ===== Pairing callbacks ===== */
 
+static void auth_pairing_confirm(struct bt_conn *conn)
+{
+	bt_conn_auth_pairing_confirm(conn);
+	LOG_INF("Pairing confirmed (Just Works)");
+}
+
+static struct bt_conn_auth_cb auth_cbs = {
+	.pairing_confirm = auth_pairing_confirm,
+};
+
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	LOG_INF("Pairing complete (bonded: %s)", bonded ? "yes" : "no");
@@ -1016,6 +1026,7 @@ int main(void)
 	ret = audio_system_init();
 	ERR_CHK(ret);
 
+	bt_conn_auth_cb_register(&auth_cbs);
 	bt_conn_auth_info_cb_register(&auth_info_cbs);
 	bt_le_per_adv_sync_cb_register(&pa_sync_cbs);
 	bt_le_scan_cb_register(&scan_cbs);
