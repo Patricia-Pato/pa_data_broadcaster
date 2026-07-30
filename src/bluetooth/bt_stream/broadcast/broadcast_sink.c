@@ -9,6 +9,7 @@
 #include <zephyr/zbus/zbus.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/audio/audio.h>
+#include <zephyr/bluetooth/audio/bap.h>
 #include <zephyr/bluetooth/audio/pacs.h>
 #include <zephyr/bluetooth/audio/csip.h>
 #include <zephyr/bluetooth/audio/cap.h>
@@ -812,6 +813,12 @@ int broadcast_sink_enable(le_audio_receive_cb recv_cb)
 			LOG_ERR("Failed to generate RSI. Err: %d", ret);
 			return ret;
 		}
+	}
+
+	ret = bt_bap_scan_delegator_register(NULL);
+	if (ret) {
+		LOG_ERR("Scan delegator register failed (ret %d)", ret);
+		return ret;
 	}
 
 	bt_bap_broadcast_sink_register_cb(&broadcast_sink_cbs);

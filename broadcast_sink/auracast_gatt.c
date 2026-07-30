@@ -9,7 +9,6 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(auracast_gatt, CONFIG_MAIN_LOG_LEVEL);
 
-/* UUIDs from PA受信機.xlsx spec */
 #define AURACAST_SVC_UUID_VAL \
 	BT_UUID_128_ENCODE(0x821C11EA, 0x5288, 0x43D9, 0x8595, 0x0583D986B462)
 #define CMD_REQ_UUID_VAL \
@@ -41,7 +40,7 @@ static ssize_t write_cmd_req(struct bt_conn *conn,
 	uint16_t opcode = sys_get_be16(&data[0]);
 	uint16_t param_len = sys_get_be16(&data[2]);
 
-	LOG_INF("CMD recv: opcode=0x%04X param_len=%u total=%u", opcode, param_len, len);
+	LOG_INF("CMD recv: opcode=0x%04X param_len=%u", opcode, param_len);
 
 	if (cmd_cb) {
 		cmd_cb(conn, opcode, &data[4], param_len);
@@ -79,7 +78,7 @@ BT_GATT_SERVICE_DEFINE(auracast_svc,
 
 	BT_GATT_CHARACTERISTIC(CMD_REQ_UUID,
 			       BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-			       BT_GATT_PERM_WRITE_AUTHEN,
+			       BT_GATT_PERM_WRITE_ENCRYPT,
 			       NULL, write_cmd_req, NULL),
 
 	BT_GATT_CHARACTERISTIC(CMD_RSP_UUID,

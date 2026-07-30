@@ -122,6 +122,8 @@ static void button_event_handler(enum pa_button_id button, enum pa_button_action
 
 	(void)user_data;
 
+	LOG_INF("Button %d action %d", button, action);
+
 	switch (button) {
 	case PA_BUTTON_PLAY_PAUSE:
 	case PA_BUTTON_VOLUME_DOWN:
@@ -141,6 +143,24 @@ static void button_event_handler(enum pa_button_id button, enum pa_button_action
 		break;
 
 	case PA_BUTTON_ACTION:
+		if (ble_pa_port.is_ready(ble_pa_port.ctx)) {
+			static uint8_t test_count;
+			uint8_t test_data[8];
+			int len = snprintf(test_data, sizeof(test_data),
+					   "TEST%u", test_count++);
+
+			ret = ble_pa_port.set_data(ble_pa_port.ctx, 0,
+						   test_data, len);
+			if (ret) {
+				LOG_WRN("Failed to send PA test data: %d", ret);
+			} else {
+				LOG_INF("PA test data sent: %s", test_data);
+			}
+		} else {
+			LOG_WRN("BLE PA not ready");
+		}
+		break;
+
 	case PA_BUTTON_VOLUME_UP:
 		if (IS_ENABLED(CONFIG_AUDIO_TEST_TONE)) {
 			if (strm_state != STATE_STREAMING) {

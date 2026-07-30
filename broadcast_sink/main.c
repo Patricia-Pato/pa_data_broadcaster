@@ -1,7 +1,6 @@
 /*
- * Auracast Receiver — PA受信機 仕様書準拠実装
+ * Auracast Receiver — Broadcast sink controlled via custom GATT service.
  *
- * GATT service with TOSHIBA Auracast Service UUIDs.
  * All control is via GATT commands from the assistant app.
  */
 
@@ -19,6 +18,7 @@
 #include "peripherals.h"
 #include "macros_common.h"
 #include "audio_system.h"
+#include "audio_datapath.h"
 #include "bt_mgmt.h"
 #include "le_audio_rx.h"
 #include "fw_info_app.h"
@@ -49,10 +49,17 @@ static uint8_t current_mute;
 
 static struct bt_le_per_adv_sync *pa_sync_handle;
 static bt_addr_le_t pa_sync_addr;
+static uint8_t pa_sync_sid;
+static uint32_t pa_sync_broadcast_id;
 
 static enum stream_state strm_state = STATE_PAUSED;
 
-/* Scan result cache for broadcast_id lookup during PA sync */
+/* Deferred BIS sync work (must not run in GATT callback context) */
+static struct k_work bis_sync_work;
+static uint8_t bis_sync_code[16];
+static bool bis_sync_has_code;
+
+/* Scan result cache for broadcast_id lookup */
 struct scan_cache_entry {
 	bt_addr_le_t addr;
 	uint8_t sid;
@@ -97,6 +104,7 @@ static uint32_t lookup_broadcast_id(const bt_addr_le_t *addr, uint8_t sid)
 			return scan_cache[i].broadcast_id;
 		}
 	}
+
 	return BRDCAST_ID_NOT_USED;
 }
 
@@ -152,7 +160,7 @@ static void notify_volume_change(void)
 				    buf, sizeof(buf));
 }
 
-/* ===== Connectable advertising via bt_mgmt ===== */
+/* ===== Connectable advertising ===== */
 
 static const uint8_t ad_flags[] = {
 	BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR
@@ -239,6 +247,12 @@ static void scan_recv_cb(const struct bt_le_scan_recv_info *info,
 
 	cache_scan_result(info->addr, info->sid, bcast_id);
 
+	char addr_str[BT_ADDR_LE_STR_LEN];
+
+	bt_addr_le_to_str(info->addr, addr_str, sizeof(addr_str));
+	LOG_INF("Found: \"%s\" SID=%u ID=0x%06X addr=%s RSSI=%d enc=%u",
+		broadcast_name, info->sid, bcast_id, addr_str, info->rssi, encrypted);
+
 	uint8_t ntf[256];
 	uint16_t pos = 0;
 
@@ -279,7 +293,8 @@ static bool pa_data_parse_cb(struct bt_data *data, void *user_data)
 		       memcmp(data->data, prev_pa_data, data->data_len) != 0;
 
 	if (changed) {
-		LOG_INF("PA data (%u bytes)", data->data_len);
+		LOG_INF("PA data changed (%u bytes)", data->data_len);
+		LOG_HEXDUMP_INF(data->data, data->data_len, "PA data");
 
 		memcpy(prev_pa_data, data->data, data->data_len);
 		prev_pa_data_len = data->data_len;
@@ -308,7 +323,6 @@ static void pa_synced_cb(struct bt_le_per_adv_sync *sync,
 	pa_sync_handle = sync;
 	receiver_state |= AC_STATE_PA_SYNCED;
 
-	/* 0x01 = PA同期中 */
 	notify_pa_sync_state(0x01, info->addr, 0x00000003);
 	notify_state_transition();
 
@@ -323,7 +337,6 @@ static void pa_sync_term_cb(struct bt_le_per_adv_sync *sync,
 	if (receiver_state & AC_STATE_BIS_SYNCED) {
 		broadcast_sink_stop();
 		receiver_state &= ~AC_STATE_BIS_SYNCED;
-		/* 0x00 = BIS非同期中 */
 		notify_bis_sync_state(0x00);
 	}
 
@@ -332,7 +345,6 @@ static void pa_sync_term_cb(struct bt_le_per_adv_sync *sync,
 	pa_sync_handle = NULL;
 	receiver_state &= ~AC_STATE_PA_SYNCED;
 
-	/* 0x00 = PA非同期中 */
 	notify_pa_sync_state(0x00, &pa_sync_addr, 0x00000003);
 	notify_state_transition();
 
@@ -380,7 +392,6 @@ static void handle_device_info_req(struct bt_conn *conn)
 	memcpy(&rsp[pos], fw_ver, strlen(fw_ver));
 	pos += strlen(fw_ver);
 
-	/* Audio Location: Front Left & Front Right */
 	rsp[pos++] = 0x03;
 	rsp[pos++] = 0x04;
 	sys_put_be32(0x00000003, &rsp[pos]);
@@ -454,7 +465,6 @@ static void handle_pa_sync_start_req(struct bt_conn *conn,
 	addr.type = params[1];
 	memcpy(addr.a.val, &params[2], 6);
 
-	/* If already PA synced, release the old sync first (per spec) */
 	if (pa_sync_handle) {
 		if (receiver_state & AC_STATE_BIS_SYNCED) {
 			broadcast_sink_stop();
@@ -478,7 +488,12 @@ static void handle_pa_sync_start_req(struct bt_conn *conn,
 
 	if (result == AC_RESULT_SUCCESS) {
 		bt_addr_le_copy(&pa_sync_addr, &addr);
+		pa_sync_sid = adv_sid;
+		pa_sync_broadcast_id = lookup_broadcast_id(&addr, adv_sid);
 		command_busy = true;
+
+		LOG_INF("PA sync start: SID=%u broadcast_id=0x%06X",
+			adv_sid, pa_sync_broadcast_id);
 	}
 
 	auracast_gatt_send_response(conn, AC_OP_PA_SYNC_START_RSP, &result, 1);
@@ -494,7 +509,6 @@ static void handle_pa_sync_release_req(struct bt_conn *conn)
 		return;
 	}
 
-	/* BIS sync release + PA data notification stop (per spec) */
 	if (receiver_state & AC_STATE_BIS_SYNCED) {
 		broadcast_sink_stop();
 		receiver_state &= ~AC_STATE_BIS_SYNCED;
@@ -517,6 +531,41 @@ static void handle_pa_sync_release_req(struct bt_conn *conn)
 	}
 }
 
+/* BIS sync runs in system workqueue to avoid GATT callback context */
+static void bis_sync_work_handler(struct k_work *work)
+{
+	if (bis_sync_has_code) {
+		broadcast_sink_broadcast_code_set(bis_sync_code);
+	}
+
+	int ret = broadcast_sink_pa_sync_set(pa_sync_handle, pa_sync_broadcast_id);
+
+	if (ret) {
+		LOG_ERR("broadcast_sink_pa_sync_set failed: %d", ret);
+		if (current_conn) {
+			uint8_t result = AC_RESULT_FAIL;
+
+			auracast_gatt_send_response(current_conn,
+						    AC_OP_BIS_SYNC_START_RSP,
+						    &result, 1);
+		}
+		return;
+	}
+
+	ret = broadcast_sink_start();
+	uint8_t result = (ret == 0) ? AC_RESULT_SUCCESS : AC_RESULT_FAIL;
+
+	if (current_conn) {
+		auracast_gatt_send_response(current_conn,
+					    AC_OP_BIS_SYNC_START_RSP,
+					    &result, 1);
+	}
+
+	if (result == AC_RESULT_SUCCESS) {
+		command_busy = true;
+	}
+}
+
 static void handle_bis_sync_start_req(struct bt_conn *conn,
 				      const uint8_t *params, uint16_t param_len)
 {
@@ -536,32 +585,12 @@ static void handle_bis_sync_start_req(struct bt_conn *conn,
 		return;
 	}
 
-	if (param_len >= 16) {
-		uint8_t code[16];
-
-		memcpy(code, params, 16);
-		broadcast_sink_broadcast_code_set(code);
+	bis_sync_has_code = (param_len >= 16);
+	if (bis_sync_has_code) {
+		memcpy(bis_sync_code, params, 16);
 	}
 
-	uint32_t bcast_id = lookup_broadcast_id(&pa_sync_addr, 0);
-	int ret = broadcast_sink_pa_sync_set(pa_sync_handle, bcast_id);
-
-	if (ret) {
-		uint8_t result = AC_RESULT_FAIL;
-
-		auracast_gatt_send_response(conn, AC_OP_BIS_SYNC_START_RSP,
-					    &result, 1);
-		return;
-	}
-
-	ret = broadcast_sink_start();
-	uint8_t result = (ret == 0) ? AC_RESULT_SUCCESS : AC_RESULT_FAIL;
-
-	auracast_gatt_send_response(conn, AC_OP_BIS_SYNC_START_RSP, &result, 1);
-
-	if (result == AC_RESULT_SUCCESS) {
-		command_busy = true;
-	}
+	k_work_submit(&bis_sync_work);
 }
 
 static void handle_bis_sync_stop_req(struct bt_conn *conn)
@@ -831,6 +860,41 @@ static void le_audio_msg_sub_thread(void)
 		ERR_CHK(ret);
 
 		switch (msg.event) {
+		case LE_AUDIO_EVT_CONFIG_RECEIVED: {
+			uint32_t bitrate_bps;
+			uint32_t sampling_rate_hz;
+			uint32_t pres_delay_us;
+
+			ret = broadcast_sink_config_get(&bitrate_bps,
+							&sampling_rate_hz,
+							&pres_delay_us);
+			if (ret) {
+				LOG_WRN("Failed to get config: %d", ret);
+				break;
+			}
+
+			LOG_INF("Config: %u Hz, %u bps, pd %u us",
+				sampling_rate_hz, bitrate_bps, pres_delay_us);
+
+			ret = audio_system_config_set(VALUE_NOT_SET, VALUE_NOT_SET,
+						      sampling_rate_hz);
+			ERR_CHK(ret);
+
+			ret = audio_datapath_pres_delay_us_set(pres_delay_us);
+			if (ret) {
+				LOG_WRN("Failed to set pres delay: %d", ret);
+			}
+			break;
+		}
+
+		case LE_AUDIO_EVT_NO_VALID_CFG:
+			LOG_WRN("No valid config found, disabling broadcast sink");
+			ret = broadcast_sink_disable();
+			if (ret) {
+				LOG_ERR("Failed to disable broadcast sink: %d", ret);
+			}
+			break;
+
 		case LE_AUDIO_EVT_STREAMING:
 			LOG_INF("BIS streaming started");
 
@@ -840,7 +904,6 @@ static void le_audio_msg_sub_thread(void)
 			}
 
 			receiver_state |= AC_STATE_BIS_SYNCED;
-			/* 0x01 = BIS同期中 */
 			notify_bis_sync_state(0x01);
 			notify_state_transition();
 			command_busy = false;
@@ -872,7 +935,6 @@ static void le_audio_msg_sub_thread(void)
 
 			if (receiver_state & AC_STATE_BIS_SYNCED) {
 				receiver_state &= ~AC_STATE_BIS_SYNCED;
-				/* 0x02 = BIS同期失敗 */
 				notify_bis_sync_state(0x02);
 			}
 
@@ -1025,6 +1087,8 @@ int main(void)
 
 	ret = audio_system_init();
 	ERR_CHK(ret);
+
+	k_work_init(&bis_sync_work, bis_sync_work_handler);
 
 	bt_conn_auth_cb_register(&auth_cbs);
 	bt_conn_auth_info_cb_register(&auth_info_cbs);
